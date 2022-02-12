@@ -72,7 +72,7 @@ object DegreeOfSeparation_KC {
 
     val connections: Array[Int] = data._1
     val distance: Int = data._2
-    val color: String = data._3
+    var color: String = data._3
 
     //  This is called from flatMap, so we return an array
     //  of potentially many BFSNodes to add to our new RDD
@@ -81,11 +81,90 @@ object DegreeOfSeparation_KC {
     //  Gray nodes are flagged for expansion, and create new
     //  gray nodes for each connection
     if (color == "GRAY"){
-      for (connection
-           )
+      for (connection <- connections){
+        val newCharacterID = connection
+        val newDistance = distance + 1
+        val newColor = "GRAY"
+
+        //  Have we stumbled across the character we're looking for?
+        //  If so increment our accumulator so the driver script knows
+        if (connection == targetCharacterID){
+          if (hitCounter.isDefined){
+            hitCounter.get.add(1)
+          }
+        }
+
+        //  Create our new GRAY node for this connection and add it to the results
+        val newEntry : BFSNode = (newCharacterID, (Array(), newDistance, newColor))
+        results += newEntry
+      }
+
+      //  Color this node as black, indicating it has been processed already.
+      color = "BLACK"
     }
+
+    //  Add the original node black in, so its connections can get merged with
+    //  the gray nodes in the reducer.
+    val thisEntry: BFSNode = (characterID, (connections, distance, color))
+    results += thisEntry
+
+    results.toArray
   }
 
+  /** Combine nodes for the same heroID, preserving the shortest distance and the darkest color */
+  def bfsReduce(data1: BFSData, data2: BFSData) = {
+    //  Extract data that we are combining
+    val edges1 : Array[Int] = data1._1
+    val edges2 : Array[Int] = data2._1
+    val distance1 : Int = data1._2
+    val distance2 : Int = data2._2
+    val color1 : String = data1._3
+    val color2 : String = data2._3
+
+    //  Default node values
+    var distance : Int = 9999
+    var color : String = "WHITE"
+    var edges : ArrayBuffer[Int] = ArrayBuffer()
+
+    //  See if one is the original node with its connections.
+    //  If so preserve them.
+    if (edges1.length > 0 ){
+      edges ++= edges1
+    }
+    if (edges2.length > 0 ){
+      edges ++= edges2
+    }
+
+    //  Preserve minimum distance
+    if (distance1 < distance){
+      distance = distance1
+    }
+    if (distance2 < distance){
+      distance = distance2
+    }
+
+    //  Preserve the darkest color
+    if (color1 == "WHITE" && (color2 == "GRAY" || color2 == "BLACK")){
+      color = color2
+    }
+    if (color1 == "GRAY" && color2 == "BLACK"){
+      color = color2
+    }
+    if (color2 == "WHITE" && (color1 == "GRAY" || color1 == "BLACK")){
+      color = color1
+    }
+    if (color2 == "GRAY" && color1 == "BLACK"){
+      color = color1
+    }
+    if (color1 == "GRAY" && color2 == "GRAY"){
+      color = color1
+    }
+    if (color1 == "BLACK" && color2 == "BLACK"){
+      color = color1
+    }
+
+    (edges.toArray, distance, color)
+  }
 
   /** Our main function where the action happens */
   def main(args: Array[String]): Unit ={
@@ -110,6 +189,21 @@ object DegreeOfSeparation_KC {
       //  to signal that we are done
       val mapped = iterationRdd.flatMap(bfsMap)
 
+      //  Note that mapped.count() action here forces the RDD to be evaluated, and
+      //  that's the only reason our accumulator is actually updated.
+      println("Processing " + mapped.count() + " values.")
+
+      if (hitCounter.isDefined){
+        val hitCount = hitCounter.get.value
+        if (hitCount > 0){
+          println("Hit the target character! From " + hitCount +
+          " different direction(s).")
+          return
+        }
+      }
+      //  Reducer combines data for each character ID, preserving the darkest
+      //  color and the shortest path
+      iterationRdd = mapped.reduceByKey(bfsReduce)
     }
   }
 }
